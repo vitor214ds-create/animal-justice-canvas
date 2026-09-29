@@ -104,7 +104,7 @@ function ScrollExperience() {
     const loadVideo = async () => {
       try {
         const parts = await Promise.all(
-          Array.from({ length: 21 }, (_, index) =>
+          Array.from({ length: 7 }, (_, index) =>
             fetch("/video/chunk-" + String(index).padStart(2, "0") + ".txt").then((response) => {
               if (!response.ok) throw new Error("Falha ao carregar parte " + index);
               return response.text();
