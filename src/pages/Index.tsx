@@ -162,8 +162,44 @@ function ScrollExperience() {
       draw(0);
       setReady(true);
     };
-    sprite.onerror = () => {
-      if (!disposed) setAssetError(true);
+    sprite.onerror = async () => {
+      if (disposed) return;
+      try {
+        const response = await fetch("/video/chunk-00.txt");
+        if (!response.ok) throw new Error("fallback indisponível");
+        const base64 = (await response.text()).trim();
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        const fallbackUrl = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
+        const video = document.createElement("video");
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = "auto";
+        video.src = fallbackUrl;
+        video.addEventListener("loadedmetadata", () => {
+          const seekFallback = () => {
+            const rect = section.getBoundingClientRect();
+            const travel = Math.max(1, section.offsetHeight - window.innerHeight);
+            const p = Math.min(1, Math.max(0, -rect.top / travel));
+            if (Number.isFinite(video.duration)) video.currentTime = p * Math.max(0, video.duration - 0.04);
+          };
+          video.addEventListener("seeked", () => {
+            if (!canvas.width) resize();
+            const cw = canvas.width, ch = canvas.height;
+            const scale = Math.max(cw / video.videoWidth, ch / video.videoHeight);
+            const w = video.videoWidth * scale, h = video.videoHeight * scale;
+            ctx.fillStyle = "#050505";
+            ctx.fillRect(0, 0, cw, ch);
+            ctx.drawImage(video, (cw - w) / 2, (ch - h) / 2, w, h);
+            setReady(true);
+          });
+          window.addEventListener("scroll", seekFallback, { passive: true });
+          seekFallback();
+        }, { once: true });
+      } catch {
+        setAssetError(true);
+      }
     };
     sprite.src = "/media/carapina-sequence.avif";
 
