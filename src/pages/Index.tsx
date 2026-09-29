@@ -104,7 +104,7 @@ function ScrollExperience() {
     const loadVideo = async () => {
       try {
         const parts = await Promise.all(
-          Array.from({ length: 7 }, (_, index) =>
+          Array.from({ length: 1 }, (_, index) =>
             fetch("/video/chunk-" + String(index).padStart(2, "0") + ".txt").then((response) => {
               if (!response.ok) throw new Error("Falha ao carregar parte " + index);
               return response.text();
@@ -132,10 +132,11 @@ function ScrollExperience() {
   useEffect(() => {
     let raf = 0;
     let lastProgress = -1;
+    let renderedTime = 0;
+    let targetTime = 0;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const update = () => {
-      raf = 0;
+    const measure = () => {
       const section = sectionRef.current;
       const video = videoRef.current;
       if (!section || !video) return;
@@ -144,36 +145,55 @@ function ScrollExperience() {
       const travel = Math.max(1, section.offsetHeight - window.innerHeight);
       const next = Math.min(1, Math.max(0, -rect.top / travel));
 
-      if (Math.abs(next - lastProgress) > 0.001) {
+      if (Math.abs(next - lastProgress) > 0.0005) {
         lastProgress = next;
         setProgress(next);
       }
 
       if (video.readyState >= 1 && Number.isFinite(video.duration)) {
-        const target = reduced
-          ? (Math.round(next * 8) / 8) * video.duration
+        targetTime = reduced
+          ? (Math.round(next * 8) / 8) * Math.max(0, video.duration - 0.04)
           : next * Math.max(0, video.duration - 0.04);
-        if (Math.abs(video.currentTime - target) > 0.025) video.currentTime = target;
       }
     };
 
-    const requestUpdate = () => {
-      if (!raf) raf = requestAnimationFrame(update);
+    const animate = () => {
+      const video = videoRef.current;
+      if (video && video.readyState >= 2 && Number.isFinite(video.duration)) {
+        const delta = targetTime - renderedTime;
+        renderedTime += delta * 0.24;
+        if (Math.abs(delta) < 0.002) renderedTime = targetTime;
+        if (Math.abs(video.currentTime - renderedTime) > 0.012) {
+          try { video.currentTime = renderedTime; } catch {}
+        }
+      }
+      raf = requestAnimationFrame(animate);
+    };
+
+    const onReady = () => {
+      const video = videoRef.current;
+      if (!video) return;
+      renderedTime = video.currentTime || 0;
+      measure();
+      setReady(true);
     };
 
     const video = videoRef.current;
-    video?.addEventListener("loadedmetadata", requestUpdate);
-    window.addEventListener("scroll", requestUpdate, { passive: true });
-    window.addEventListener("resize", requestUpdate);
-    requestUpdate();
+    video?.addEventListener("loadedmetadata", onReady);
+    video?.addEventListener("canplay", onReady);
+    window.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", measure);
+    measure();
+    raf = requestAnimationFrame(animate);
 
     return () => {
-      if (raf) cancelAnimationFrame(raf);
-      video?.removeEventListener("loadedmetadata", requestUpdate);
-      window.removeEventListener("scroll", requestUpdate);
-      window.removeEventListener("resize", requestUpdate);
+      cancelAnimationFrame(raf);
+      video?.removeEventListener("loadedmetadata", onReady);
+      video?.removeEventListener("canplay", onReady);
+      window.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
     };
-  }, []);
+  }, [videoUrl]);
 
   const activeChapter = useMemo(() => {
     let best = 0;
@@ -200,6 +220,7 @@ function ScrollExperience() {
           playsInline
           aria-hidden="true"
           onCanPlay={() => setReady(true)}
+          onLoadedData={() => setReady(true)}
         />
         <div className="video-vignette" />
         <div className="video-grid" />
