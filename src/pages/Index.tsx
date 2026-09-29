@@ -106,15 +106,17 @@ function ScrollExperience() {
     if (!ctx) return;
 
     const FRAME_COUNT = 80;
-    const images: HTMLImageElement[] = new Array(FRAME_COUNT);
+    const COLS = 8;
+    const ROWS = 10;
+    const FRAME_W = 320;
+    const FRAME_H = 180;
+    const sprite = new Image();
     let loaded = 0;
     let target = 0;
     let rendered = 0;
     let raf = 0;
     let disposed = false;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-    const url = (i: number) => `/frames/frame-${String(i + 1).padStart(3, "0")}.webp`;
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -125,16 +127,18 @@ function ScrollExperience() {
     };
 
     const draw = (index: number) => {
-      const image = images[Math.max(0, Math.min(FRAME_COUNT - 1, index))];
-      if (!image?.complete || !image.naturalWidth) return;
+      if (!sprite.complete || !sprite.naturalWidth) return;
+      const frame = Math.max(0, Math.min(FRAME_COUNT - 1, index));
+      const sx = (frame % COLS) * FRAME_W;
+      const sy = Math.floor(frame / COLS) * FRAME_H;
       const cw = canvas.width;
       const ch = canvas.height;
-      const scale = Math.max(cw / image.naturalWidth, ch / image.naturalHeight);
-      const w = image.naturalWidth * scale;
-      const h = image.naturalHeight * scale;
+      const scale = Math.max(cw / FRAME_W, ch / FRAME_H);
+      const w = FRAME_W * scale;
+      const h = FRAME_H * scale;
       ctx.fillStyle = "#050505";
       ctx.fillRect(0, 0, cw, ch);
-      ctx.drawImage(image, (cw - w) / 2, (ch - h) / 2, w, h);
+      ctx.drawImage(sprite, sx, sy, FRAME_W, FRAME_H, (cw - w) / 2, (ch - h) / 2, w, h);
     };
 
     const measure = () => {
@@ -152,29 +156,16 @@ function ScrollExperience() {
       raf = requestAnimationFrame(tick);
     };
 
-    const loadFrame = (i: number) => {
-      const img = new Image();
-      img.decoding = "async";
-      img.src = url(i);
-      img.onload = () => {
-        loaded += 1;
-        if (i === 0) {
-          draw(0);
-          setReady(true);
-        }
-        if (loaded === FRAME_COUNT) setReady(true);
-      };
-      img.onerror = () => {
-        if (i === 0 && !disposed) setAssetError(true);
-      };
-      images[i] = img;
+    sprite.decoding = "async";
+    sprite.onload = () => {
+      if (disposed) return;
+      draw(0);
+      setReady(true);
     };
-
-    // First frame is critical; the rest is progressively decoded.
-    loadFrame(0);
-    const idle = window.setTimeout(() => {
-      for (let i = 1; i < FRAME_COUNT; i += 1) loadFrame(i);
-    }, 40);
+    sprite.onerror = () => {
+      if (!disposed) setAssetError(true);
+    };
+    sprite.src = "/media/carapina-sequence.avif";
 
     resize();
     measure();
@@ -184,7 +175,6 @@ function ScrollExperience() {
 
     return () => {
       disposed = true;
-      clearTimeout(idle);
       cancelAnimationFrame(raf);
       window.removeEventListener("scroll", measure);
       window.removeEventListener("resize", resize);
