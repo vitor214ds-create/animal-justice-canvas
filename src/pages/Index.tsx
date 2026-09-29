@@ -92,118 +92,111 @@ function LogoMark() {
 
 function ScrollExperience() {
   const sectionRef = useRef<HTMLElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [progress, setProgress] = useState(0);
   const [ready, setReady] = useState(false);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [assetError, setAssetError] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
-    let objectUrl = "";
+    const canvas = canvasRef.current;
+    const section = sectionRef.current;
+    if (!canvas || !section) return;
 
-    const loadVideo = async () => {
-      try {
-        const parts = await Promise.all(
-          Array.from({ length: 1 }, (_, index) =>
-            fetch("/video/chunk-" + String(index).padStart(2, "0") + ".txt").then((response) => {
-              if (!response.ok) throw new Error("Falha ao carregar parte " + index);
-              return response.text();
-            })
-          )
-        );
-        if (cancelled) return;
-        const binary = atob(parts.join(""));
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-        objectUrl = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
-        setVideoUrl(objectUrl);
-      } catch (error) {
-        console.error("Não foi possível carregar o vídeo da experiência Carapina Drone:", error);
-      }
-    };
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) return;
 
-    loadVideo();
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, []);
-
-  useEffect(() => {
+    const FRAME_COUNT = 80;
+    const images: HTMLImageElement[] = new Array(FRAME_COUNT);
+    let loaded = 0;
+    let target = 0;
+    let rendered = 0;
     let raf = 0;
-    let lastProgress = -1;
-    let renderedTime = 0;
-    let targetTime = 0;
+    let disposed = false;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const measure = () => {
-      const section = sectionRef.current;
-      const video = videoRef.current;
-      if (!section || !video) return;
+    const url = (i: number) => `/frames/frame-${String(i + 1).padStart(3, "0")}.webp`;
 
+    const resize = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      draw(Math.round(rendered));
+    };
+
+    const draw = (index: number) => {
+      const image = images[Math.max(0, Math.min(FRAME_COUNT - 1, index))];
+      if (!image?.complete || !image.naturalWidth) return;
+      const cw = canvas.width;
+      const ch = canvas.height;
+      const scale = Math.max(cw / image.naturalWidth, ch / image.naturalHeight);
+      const w = image.naturalWidth * scale;
+      const h = image.naturalHeight * scale;
+      ctx.fillStyle = "#050505";
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.drawImage(image, (cw - w) / 2, (ch - h) / 2, w, h);
+    };
+
+    const measure = () => {
       const rect = section.getBoundingClientRect();
       const travel = Math.max(1, section.offsetHeight - window.innerHeight);
-      const next = Math.min(1, Math.max(0, -rect.top / travel));
-
-      if (Math.abs(next - lastProgress) > 0.0005) {
-        lastProgress = next;
-        setProgress(next);
-      }
-
-      if (video.readyState >= 1 && Number.isFinite(video.duration)) {
-        targetTime = reduced
-          ? (Math.round(next * 8) / 8) * Math.max(0, video.duration - 0.04)
-          : next * Math.max(0, video.duration - 0.04);
-      }
+      const p = Math.min(1, Math.max(0, -rect.top / travel));
+      target = (reduced ? Math.round(p * 10) / 10 : p) * (FRAME_COUNT - 1);
+      setProgress((old) => Math.abs(old - p) > 0.002 ? p : old);
     };
 
-    const animate = () => {
-      const video = videoRef.current;
-      if (video && video.readyState >= 2 && Number.isFinite(video.duration)) {
-        const delta = targetTime - renderedTime;
-        renderedTime += delta * 0.24;
-        if (Math.abs(delta) < 0.002) renderedTime = targetTime;
-        if (Math.abs(video.currentTime - renderedTime) > 0.012) {
-          try { video.currentTime = renderedTime; } catch {}
+    const tick = () => {
+      rendered += (target - rendered) * (reduced ? 1 : 0.18);
+      if (Math.abs(target - rendered) < 0.01) rendered = target;
+      draw(Math.round(rendered));
+      raf = requestAnimationFrame(tick);
+    };
+
+    const loadFrame = (i: number) => {
+      const img = new Image();
+      img.decoding = "async";
+      img.src = url(i);
+      img.onload = () => {
+        loaded += 1;
+        if (i === 0) {
+          draw(0);
+          setReady(true);
         }
-      }
-      raf = requestAnimationFrame(animate);
+        if (loaded === FRAME_COUNT) setReady(true);
+      };
+      img.onerror = () => {
+        if (i === 0 && !disposed) setAssetError(true);
+      };
+      images[i] = img;
     };
 
-    const onReady = () => {
-      const video = videoRef.current;
-      if (!video) return;
-      renderedTime = video.currentTime || 0;
-      measure();
-      setReady(true);
-    };
+    // First frame is critical; the rest is progressively decoded.
+    loadFrame(0);
+    const idle = window.setTimeout(() => {
+      for (let i = 1; i < FRAME_COUNT; i += 1) loadFrame(i);
+    }, 40);
 
-    const video = videoRef.current;
-    video?.addEventListener("loadedmetadata", onReady);
-    video?.addEventListener("canplay", onReady);
-    window.addEventListener("scroll", measure, { passive: true });
-    window.addEventListener("resize", measure);
+    resize();
     measure();
-    raf = requestAnimationFrame(animate);
+    window.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", resize, { passive: true });
+    raf = requestAnimationFrame(tick);
 
     return () => {
+      disposed = true;
+      clearTimeout(idle);
       cancelAnimationFrame(raf);
-      video?.removeEventListener("loadedmetadata", onReady);
-      video?.removeEventListener("canplay", onReady);
       window.removeEventListener("scroll", measure);
-      window.removeEventListener("resize", measure);
+      window.removeEventListener("resize", resize);
     };
-  }, [videoUrl]);
+  }, []);
 
   const activeChapter = useMemo(() => {
     let best = 0;
     let distance = Infinity;
     chapters.forEach((chapter, index) => {
       const d = Math.abs(progress - chapter.at);
-      if (d < distance) {
-        best = index;
-        distance = d;
-      }
+      if (d < distance) { best = index; distance = d; }
     });
     return best;
   }, [progress]);
@@ -211,58 +204,36 @@ function ScrollExperience() {
   return (
     <section ref={sectionRef} id="inicio" className="scroll-story" aria-label="Experiência Carapina Drone controlada pelo scroll">
       <div className="story-sticky">
-        <video
-          ref={videoRef}
-          className={"story-video " + (ready ? "is-ready" : "")}
-          src={videoUrl ?? undefined}
-          preload="auto"
-          muted
-          playsInline
-          aria-hidden="true"
-          onCanPlay={() => setReady(true)}
-          onLoadedData={() => setReady(true)}
-        />
+        <canvas ref={canvasRef} className={"story-canvas " + (ready ? "is-ready" : "")} aria-hidden="true" />
         <div className="video-vignette" />
-        <div className="video-grid" />
-        <div className="story-noise" />
+        <div className="story-glow" />
+        {assetError && <div className="asset-fallback" aria-hidden="true"><LogoMark /></div>}
 
         <div className="story-scenes">
           {chapters.map((chapter, index) => {
             const distance = Math.abs(progress - chapter.at);
-            const opacity = Math.max(0, Math.min(1, 1 - distance / 0.125));
-            const y = Math.max(-28, Math.min(28, (progress - chapter.at) * -180));
+            const opacity = Math.max(0, Math.min(1, 1 - distance / 0.115));
+            const y = Math.max(-22, Math.min(22, (progress - chapter.at) * -140));
             return (
-              <article
-                key={chapter.index}
-                className={"story-copy story-copy--" + chapter.align + " " + (activeChapter === index ? "is-active" : "")}
-                style={{ opacity, transform: "translate3d(0, " + y + "px, 0)" }}
-                aria-hidden={opacity < 0.08}
-              >
+              <article key={chapter.index} className={"story-copy story-copy--" + chapter.align + " " + (activeChapter === index ? "is-active" : "")}
+                style={{ opacity, transform: `translate3d(0, ${y}px, 0)` }} aria-hidden={opacity < 0.08}>
                 <div className="story-kicker"><span>{chapter.index}</span>{chapter.eyebrow}</div>
                 <h1 className={index === 0 ? "story-title story-title--hero" : "story-title"}>{chapter.title}</h1>
                 <p>{chapter.body}</p>
-                {index === 0 && (
-                  <div className="hero-actions">
-                    <a href={INSTAGRAM} target="_blank" rel="noreferrer" className="button button--solid">
-                      Falar no Instagram <ArrowUpRight size={16} />
-                    </a>
-                    <a href="#tecnologia" className="button button--ghost">Conhecer a operação</a>
-                  </div>
-                )}
+                {index === 0 && <div className="hero-actions">
+                  <a href={INSTAGRAM} target="_blank" rel="noreferrer" className="button button--solid">Falar no Instagram <ArrowUpRight size={16} /></a>
+                  <a href="#tecnologia" className="button button--ghost">Conhecer a operação</a>
+                </div>}
               </article>
             );
           })}
         </div>
 
         <div className="story-footerline" aria-hidden="true">
-          <span>SCROLL PARA EXPLORAR</span>
+          <span>ROLE PARA CONTROLAR O VOO</span>
           <div className="story-progress"><i style={{ transform: "scaleX(" + progress + ")" }} /></div>
           <span>{String(activeChapter).padStart(2, "0")} / 04</span>
         </div>
-
-        <a className="scroll-hint" href="#tecnologia" aria-label="Continuar para a próxima seção">
-          <ChevronDown size={18} />
-        </a>
       </div>
     </section>
   );
