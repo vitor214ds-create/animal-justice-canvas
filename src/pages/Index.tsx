@@ -101,112 +101,102 @@ function ScrollExperience() {
     const canvas = canvasRef.current;
     const section = sectionRef.current;
     if (!canvas || !section) return;
-
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) return;
 
-    const FRAME_COUNT = 80;
-    const COLS = 8;
-    const ROWS = 10;
-    const FRAME_W = 320;
-    const FRAME_H = 180;
-    const sprite = new Image();
-    let loaded = 0;
-    let target = 0;
-    let rendered = 0;
-    let raf = 0;
     let disposed = false;
+    let raf = 0;
+    let targetTime = 0;
+    let displayTime = 0;
+    let objectUrl = "";
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.setAttribute("playsinline", "");
+    video.setAttribute("webkit-playsinline", "");
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const drawVideo = () => {
+      if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+      const cw = canvas.width, ch = canvas.height;
+      const scale = Math.max(cw / video.videoWidth, ch / video.videoHeight);
+      const w = video.videoWidth * scale, h = video.videoHeight * scale;
+      ctx.fillStyle = "#050505";
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.drawImage(video, (cw - w) / 2, (ch - h) / 2, w, h);
+    };
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const rect = canvas.getBoundingClientRect();
-      canvas.width = Math.round(rect.width * dpr);
-      canvas.height = Math.round(rect.height * dpr);
-      draw(Math.round(rendered));
-    };
-
-    const draw = (index: number) => {
-      if (!sprite.complete || !sprite.naturalWidth) return;
-      const frame = Math.max(0, Math.min(FRAME_COUNT - 1, index));
-      const sx = (frame % COLS) * FRAME_W;
-      const sy = Math.floor(frame / COLS) * FRAME_H;
-      const cw = canvas.width;
-      const ch = canvas.height;
-      const scale = Math.max(cw / FRAME_W, ch / FRAME_H);
-      const w = FRAME_W * scale;
-      const h = FRAME_H * scale;
-      ctx.fillStyle = "#050505";
-      ctx.fillRect(0, 0, cw, ch);
-      ctx.drawImage(sprite, sx, sy, FRAME_W, FRAME_H, (cw - w) / 2, (ch - h) / 2, w, h);
+      canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      drawVideo();
     };
 
     const measure = () => {
       const rect = section.getBoundingClientRect();
       const travel = Math.max(1, section.offsetHeight - window.innerHeight);
       const p = Math.min(1, Math.max(0, -rect.top / travel));
-      target = (reduced ? Math.round(p * 10) / 10 : p) * (FRAME_COUNT - 1);
+      const normalized = reduced ? Math.round(p * 12) / 12 : p;
+      if (Number.isFinite(video.duration)) targetTime = normalized * Math.max(0, video.duration - 0.05);
       setProgress((old) => Math.abs(old - p) > 0.002 ? p : old);
     };
 
     const tick = () => {
-      rendered += (target - rendered) * (reduced ? 1 : 0.18);
-      if (Math.abs(target - rendered) < 0.01) rendered = target;
-      draw(Math.round(rendered));
+      if (video.readyState >= 2 && Number.isFinite(video.duration)) {
+        displayTime += (targetTime - displayTime) * (reduced ? 1 : 0.22);
+        if (Math.abs(targetTime - displayTime) < 0.008) displayTime = targetTime;
+        if (!video.seeking && Math.abs(video.currentTime - displayTime) > 0.016) {
+          try { video.currentTime = displayTime; } catch {}
+        }
+      }
       raf = requestAnimationFrame(tick);
     };
 
-    sprite.decoding = "async";
-    sprite.onload = () => {
-      if (disposed) return;
-      draw(0);
-      setReady(true);
-    };
-    sprite.onerror = async () => {
-      if (disposed) return;
+    const boot = async () => {
       try {
-        const response = await fetch("/video/chunk-00.txt");
-        if (!response.ok) throw new Error("fallback indisponível");
+        // This compact H.264 asset is committed with the site and reconstructed once.
+        // It avoids missing external media URLs while keeping the scroll deterministic.
+        const response = await fetch("/video/chunk-00.txt", { cache: "force-cache" });
+        if (!response.ok) throw new Error("media asset unavailable");
         const base64 = (await response.text()).trim();
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-        const fallbackUrl = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
-        const video = document.createElement("video");
-        video.muted = true;
-        video.playsInline = true;
-        video.preload = "auto";
-        video.src = fallbackUrl;
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        objectUrl = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
+        video.src = objectUrl;
+
         video.addEventListener("loadedmetadata", () => {
-          const seekFallback = () => {
-            const rect = section.getBoundingClientRect();
-            const travel = Math.max(1, section.offsetHeight - window.innerHeight);
-            const p = Math.min(1, Math.max(0, -rect.top / travel));
-            if (Number.isFinite(video.duration)) video.currentTime = p * Math.max(0, video.duration - 0.04);
-          };
-          video.addEventListener("seeked", () => {
-            if (!canvas.width) resize();
-            const cw = canvas.width, ch = canvas.height;
-            const scale = Math.max(cw / video.videoWidth, ch / video.videoHeight);
-            const w = video.videoWidth * scale, h = video.videoHeight * scale;
-            ctx.fillStyle = "#050505";
-            ctx.fillRect(0, 0, cw, ch);
-            ctx.drawImage(video, (cw - w) / 2, (ch - h) / 2, w, h);
-            setReady(true);
-          });
-          window.addEventListener("scroll", seekFallback, { passive: true });
-          seekFallback();
+          displayTime = 0;
+          targetTime = 0;
+          measure();
+          try { video.currentTime = 0.001; } catch {}
         }, { once: true });
+
+        video.addEventListener("loadeddata", () => {
+          resize();
+          drawVideo();
+          setReady(true);
+        });
+
+        video.addEventListener("seeked", () => {
+          drawVideo();
+          setReady(true);
+        });
+
+        video.addEventListener("error", () => setAssetError(true), { once: true });
+        video.load();
       } catch {
         setAssetError(true);
       }
     };
-    sprite.src = "/media/carapina-sequence.avif";
 
     resize();
-    measure();
     window.addEventListener("scroll", measure, { passive: true });
     window.addEventListener("resize", resize, { passive: true });
+    boot();
     raf = requestAnimationFrame(tick);
 
     return () => {
@@ -214,6 +204,9 @@ function ScrollExperience() {
       cancelAnimationFrame(raf);
       window.removeEventListener("scroll", measure);
       window.removeEventListener("resize", resize);
+      video.pause();
+      video.removeAttribute("src");
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, []);
 
@@ -233,8 +226,8 @@ function ScrollExperience() {
         <canvas ref={canvasRef} className={"story-canvas " + (ready ? "is-ready" : "")} aria-hidden="true" />
         <div className="video-vignette" />
         <div className="story-glow" />
+        {!ready && !assetError && <div className="story-loader" aria-hidden="true"><span /></div>}
         {assetError && <div className="asset-fallback" aria-hidden="true"><LogoMark /></div>}
-
         <div className="story-scenes">
           {chapters.map((chapter, index) => {
             const distance = Math.abs(progress - chapter.at);
@@ -254,7 +247,6 @@ function ScrollExperience() {
             );
           })}
         </div>
-
         <div className="story-footerline" aria-hidden="true">
           <span>ROLE PARA CONTROLAR O VOO</span>
           <div className="story-progress"><i style={{ transform: "scaleX(" + progress + ")" }} /></div>
